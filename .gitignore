@@ -1,0 +1,11 @@
+# general
+.nfs*
+*~
+# Python cruft
+*.pyc
+__pycache__
+# for compiler projects
+*.asm
+*.out
+*.out.xml
+*.vm
