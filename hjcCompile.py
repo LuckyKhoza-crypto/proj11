@@ -194,8 +194,8 @@ class CompileEngine(object):
             #TODO-11B: Define this parameter in the symbol table.
             #          Uncomment the next two lines and fill in a value 
             #          for parameterKind.
-            #parameterKind = 
-            #self._DefineSymbol(parameterName, parameterType, parameterKind)
+            parameterKind = SYMK_ARG
+            self._DefineSymbol(parameterName, parameterType, parameterKind)
 
             if not self._MatchSymbol(','):
                 break
@@ -225,6 +225,7 @@ class CompileEngine(object):
         #TODO-11A: Write the VM function command below.
         #          The function name is given as a parameter above; 
         #          you will also need self.className.
+        self.vmWriter.writeFunction(f"{self.className}.{subroutineName}", self.symbolTable.VarCount(SYMK_VAR))
 
         if subroutineType == KW_CONSTRUCTOR:
             #In a constructor, the first operations must allocate memory for 
@@ -270,6 +271,7 @@ class CompileEngine(object):
             variableName = self._ExpectIdentifier()
             self._NextToken()
             #TODO-11B: Define the declared variable (above) in the symbol table.
+            self._DefineSymbol(variableName, variableType, SYMK_VAR)
             if not self._MatchSymbol(','):
                 break
             self._NextToken()
@@ -335,9 +337,7 @@ class CompileEngine(object):
             #           pointer.  Leave the result on the stack for now.
 
 
-        #TODO-11B: After the expression is compiled above, write a pop
-        #    to assign the computed expression to given variable.
-        #    Don't worry about arrays yet.
+        
         #TODO-11D: Write VM commands to pop value into desired array location.
         #    The top value of the stack should be the value, and the value 
         #    underneath it should be a pointer to the location the value should 
@@ -358,6 +358,11 @@ class CompileEngine(object):
         self._ExpectSymbol('=')
         self._NextToken()
         self._CompileExpression()
+
+        #TODO-11B: After the expression is compiled above, write a pop
+        #    to assign the computed expression to given variable.
+        #    Don't worry about arrays yet.
+        self.WritePop(SEG_LOCAL, self.symbolTable.IndexOf(self.tokenizer.Identifier()))
     
         self._ExpectSymbol(';')
         self._NextToken()
@@ -385,6 +390,9 @@ class CompileEngine(object):
 
         #TODO-11A: Discard the return value from a void function 
         #          by popping it into temp 0.
+
+        self.WritePop('temp', 0)
+
 
         self._ExpectSymbol(';')
         self._NextToken()
@@ -439,6 +447,8 @@ class CompileEngine(object):
 
         #TODO-11A: Write the call to the function using scopeName
         #    and functionName.
+
+        self.vmWriter.WriteCall(callClass, subroutineName, argcount)
         
         self._ExpectSymbol(')')
         self._NextToken()
@@ -464,10 +474,16 @@ class CompileEngine(object):
         self._ExpectKeyword(KW_RETURN)
         self._NextToken()
 
-        if( self.tokenizer.TokenType() != TK_SYMBOL) or ( self.tokenizer.Symbol() != ";"):
+        
+        if self.tokenizer.Keyword() == KW_THIS:
+            self.vmWriter.WritePush('pointer', 0)
+            self._NextToken()
+        elif( self.tokenizer.TokenType() != TK_SYMBOL) or ( self.tokenizer.Symbol() != ";"):
             self._CompileExpression()
-
-        # self._WriteXmlTag('<symbol> ; </symbol>\n')
+        else:
+            self.vmWriter.WritePush('constant', 0)
+        
+        self.vmWriter.WriteReturn()
         self._ExpectSymbol(';')
         self._NextToken()
         self._WriteXmlTag('</returnStatement>\n')
@@ -547,8 +563,17 @@ class CompileEngine(object):
         self._NextToken()
         self._ExpectSymbol('(')
 
+        condition = self._GetNextLabel("WHILE_EXP")
+        self.vmWriter.WriteLabel(condition)
+
+        end = self._GetNextLabel("WHILE_END")
+        self._labelCounters += 1
+
         self._NextToken()
         self._CompileExpression()
+
+        self.vmWriter.WriteArithmetic('not')
+        self.vmWriter.WriteIf(end)
 
         self._ExpectSymbol(')')
 
@@ -559,14 +584,16 @@ class CompileEngine(object):
         self._NextToken()
 
         self._CompileStatements()
-        self._ExpectSymbol('}')
-
-        condition = self._GetNextLabel("WHILE_EXP")
-        end = self._GetNextLabel("WHILE_END")
 
         self.vmWriter.WriteGoto(condition)
-        self.vmWriter.WriteLabel(condition)
-        self.vmWriter.WriteIf(end)
+        self.vmWriter.WriteLabel(end)
+        self._ExpectSymbol('}')
+
+       
+
+        # self.vmWriter.WriteGoto(condition)
+        # self.vmWriter.WriteLabel(condition)
+        # self.vmWriter.WriteIf(end)
 
         self._NextToken()
         self._WriteXmlTag('</whileStatement>\n')
@@ -591,6 +618,19 @@ class CompileEngine(object):
         #     standard library, as the VM does not have those operators
         #     built-in. Use the dictionary of opcodes above.
         self._CompileTerm()
+        
+        while self.tokenizer.TokenType() == TK_SYMBOL and self.tokenizer.Symbol() in "+-*/&|<>=":
+            op = self.tokenizer.Symbol()
+            self._CompileTerm()
+
+            if op == "*":
+                self.vmWriter.WriteCall("Math.multiply", 2)
+            elif op == "/":
+                self.vmWriter.WriteCall("Math.divide", 2)
+            else:
+                self.vmWriter.WriteArithmetic(vm_opcodes[op])
+            if self.tokenizer.Symbol() not in "+-*/&|<>=":
+                break
 
         self._WriteXmlTag('</expression>\n')
 
@@ -617,8 +657,7 @@ class CompileEngine(object):
         # TODO-10D: Extend the following to account for subroutine calls.
         # TODO-10F: Extend the following to account for array indexing.
         # TODO-10E: Extend the following to account for all other terms.
-        # TODO-11A: Write the VM command below to push an integer constant
-        #           onto the stack.
+       
         # TODO-11B: Write VM commands below for the unary operations, 
         #           and keyword constants.
         # TODO-11B: If the expression is a variable, push it onto the stack.
@@ -630,8 +669,11 @@ class CompileEngine(object):
 
         self._WriteXmlTag('<term>\n')  
         if self.tokenizer.TokenType() == TK_INT_CONST:
+            self.vmWriter.WritePush(SEG_CONST, self.tokenizer.IntVal())
             self._MatchIntConstant()
             self._NextToken()
+
+        # TODO-11A: Write the VM command below to push an integer constant onto the stack.
         elif self.tokenizer.TokenType() == TK_STRING_CONST:
             self._MatchStringConstant()
             self._NextToken()
